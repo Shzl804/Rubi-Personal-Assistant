@@ -7,6 +7,9 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
 .env
-.env
+venv/
+__pycache__/
+*.db
+logs/
+

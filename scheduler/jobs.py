@@ -1,25 +1,19 @@
 # scheduler/jobs.py
-import subprocess
-
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from config import REMINDER_CHECK_SECONDS
+from core import notifier
 from tools.reminders import pop_due_reminders
 
 
 def check_reminders():
+    """Runs in a background thread every few seconds."""
+    # pop_due_reminders() marks them done, so each reminder fires only once.
     for reminder in pop_due_reminders():
-        print(f"\n\n*** REMINDER: {reminder['text']}  (was set for {reminder['remind_at']}) ***")
-        print("You: ", end="", flush=True)   # redraw the input prompt (cosmetic)
-
-        # Ubuntu desktop notification. Ignore if notify-send is not installed.
-        try:
-            subprocess.run(
-                ["notify-send", "Rubi Reminder", reminder["text"]],
-                check=False,
-            )
-        except FileNotFoundError:
-            pass
+        notifier.notify(
+            "Rubi Reminder",
+            f"{reminder['text']} (set for {reminder['remind_at']})",
+        )
 
 
 def start_scheduler() -> BackgroundScheduler:

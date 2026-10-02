@@ -41,7 +41,7 @@
                                                                        through core/safety.py)
 ```
 
-**Honest limit:** Telegram itself needs internet. When the laptop is offline, the **terminal** keeps working with the local model, but Telegram cannot reach you.
+**Honest limit:** Telegram itself needs internet. When the laptop is offline, the **terminal** keeps working with the local model, but Telegram cannot reach you. If your network **blocks** Telegram (common on some ISPs), the bot can use a proxy: see "Optional: use a proxy only for Telegram" in Step 4.
 
 ---
 
@@ -88,7 +88,7 @@ Two more details this stage uses:
 ```
 rubi/
 ├── .env                       # CHANGED (new keys)
-├── requirements.txt           # CHANGED (2 new packages)
+├── requirements.txt           # CHANGED (2 new packages + SOCKS support)
 ├── config.py                  # CHANGED (new settings)
 ├── main.py                    # CHANGED (modes: terminal / telegram / both)
 ├── ollama/
@@ -191,10 +191,12 @@ python-dotenv
 apscheduler
 openai
 python-telegram-bot
+httpx[socks]
 ```
 
 - `openai`: used **only as a client** for Ollama, because Ollama speaks the same API format as OpenAI. This lets the local model reply in the same shape as Groq, so most of your agent code stays unchanged.
 - `python-telegram-bot`: the Telegram library.
+- `httpx[socks]`: adds SOCKS support to the HTTP library that `python-telegram-bot` uses. Only needed if your proxy URL starts with `socks5://`. It is harmless to install if you do not use a proxy.
 
 ```bash
 cd ~/rubi
@@ -232,6 +234,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 _raw_id = os.getenv("TELEGRAM_USER_ID", "").strip()
 TELEGRAM_USER_ID = int(_raw_id) if _raw_id.isdigit() else 0
 
+# OPTIONAL proxy used ONLY for Telegram traffic (see "Optional: use a proxy only for
+# Telegram" below). Empty means "no proxy". Examples:
+#   socks5://127.0.0.1:1080      http://127.0.0.1:8080
+TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", "").strip() or None
+
 # If you do not tap Yes/No within this time, the request is treated as DENIED.
 APPROVAL_TIMEOUT_SECONDS = 120
 
@@ -251,10 +258,39 @@ INTERNET_CACHE_SECONDS = 15   # remember the "am I online?" result for this long
 ```
 TELEGRAM_TOKEN=paste_token_here_in_step_11
 TELEGRAM_USER_ID=
+TELEGRAM_PROXY=
 OLLAMA_MODEL=rubi-local
 ```
 
+Leave `TELEGRAM_PROXY=` **empty** if Telegram works on your network.
+
 > `TELEGRAM_TOKEN` contains the word "TOKEN", so the `_clean_env()` function from Stage 2 automatically hides it from every shell command Rubi runs.
+
+#### Optional: use a proxy only for Telegram
+
+**When you need it:** some ISPs block or throttle Telegram. Then the bot fails at startup with `httpx.ConnectTimeout` and `telegram.error.TimedOut`. Test your network first:
+
+```bash
+curl -m 10 -I https://api.telegram.org
+```
+
+If this hangs or times out, Telegram is blocked and you need a proxy or VPN.
+
+**What to do:**
+
+1. Start your VPN or proxy app on the laptop. Find the local address it listens on. Common examples: `socks5://127.0.0.1:1080` (SOCKS5) or `http://127.0.0.1:8080` (HTTP).
+2. Put that address in `.env`:
+
+```
+TELEGRAM_PROXY=socks5://127.0.0.1:1080
+```
+
+3. Make sure `httpx[socks]` is installed (Step 2) if the address starts with `socks5://`.
+4. The code that uses this value is in Step 12 (`_new_builder()` in `telegram_bot.py`).
+
+**Why "only for Telegram":** the proxy is given directly to the Telegram library. Groq, Ollama and the connectivity check use their own connections and **do not** go through it. This matters because Ollama runs on `localhost`, which must never be sent through a proxy.
+
+> Do **not** set the system-wide variables `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` for this. They would push every program (including Groq and Ollama) through the proxy.
 
 ---
 
@@ -828,8 +864,11 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters,
 )
+from telegram.request import HTTPXRequest
 
-from config import TELEGRAM_TOKEN, TELEGRAM_USER_ID, APPROVAL_TIMEOUT_SECONDS
+from config import (
+    TELEGRAM_TOKEN, TELEGRAM_USER_ID, TELEGRAM_PROXY, APPROVAL_TIMEOUT_SECONDS,
+)
 from core import notifier, safety
 from core.agent import Agent
 from core.commands import handle_command
@@ -1050,6 +1089,32 @@ async def post_init(application: Application) -> None:
 # Starting the bot
 # ===========================================================================
 
+def _new_builder():
+    """
+    Application builder shared by setup mode and normal mode.
+
+    If TELEGRAM_PROXY is set, ONLY Telegram traffic goes through it. Groq and Ollama
+    use their own HTTP clients, so they are not affected.
+
+    python-telegram-bot uses TWO separate HTTP clients: one for normal calls
+    (send_message, ...) and one for the long-polling getUpdates call.
+    Both need the same proxy. The longer timeouts help on slow proxies/VPNs.
+    (TELEGRAM_PROXY = None simply means "no proxy".)
+    """
+    request = HTTPXRequest(
+        proxy=TELEGRAM_PROXY, connect_timeout=30, read_timeout=30, write_timeout=30,
+    )
+    updates_request = HTTPXRequest(
+        proxy=TELEGRAM_PROXY, connect_timeout=30, read_timeout=30,
+    )
+    return (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .request(request)
+        .get_updates_request(updates_request)
+    )
+
+
 def can_start() -> bool:
     """True if both the token and your user ID are configured."""
     return bool(TELEGRAM_TOKEN and TELEGRAM_USER_ID)
@@ -1072,7 +1137,7 @@ def _run_setup_mode() -> None:
     print("Open Telegram, send any message to your bot, and copy the ID it replies with.")
     print("Then add it to .env and restart. Press Ctrl+C to stop.\n")
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = _new_builder().build()
     app.add_handler(MessageHandler(
         filters.UpdateType.MESSAGE & filters.ChatType.PRIVATE, reply_id
     ))
@@ -1094,8 +1159,7 @@ def run() -> None:
     allowed = filters.User(user_id=TELEGRAM_USER_ID) & filters.ChatType.PRIVATE
 
     app = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
+        _new_builder()          # token + optional proxy (see above)
         # IMPORTANT: lets button taps be processed while on_text is still waiting.
         # Without this, approvals would deadlock (see "Idea B" at the top of the guide).
         .concurrent_updates(True)
@@ -1111,6 +1175,7 @@ def run() -> None:
     app.add_handler(MessageHandler(~allowed, on_stranger))   # everyone else: log, never reply
     app.add_error_handler(on_error)
 
+    print(f"Telegram proxy: {'enabled' if TELEGRAM_PROXY else 'none'}")
     print("Telegram bot is running. Press Ctrl+C to stop.")
     app.run_polling(
         # SAFETY: ignore any messages that arrived while Rubi was off. Otherwise old
@@ -1248,6 +1313,8 @@ if __name__ == "__main__":
 
 ### Step 14: Find your Telegram user ID, then start the bot
 
+> If Telegram is blocked on your network (you get `ConnectTimeout` or `TimedOut`), start your VPN/proxy and set `TELEGRAM_PROXY` in `.env` first (see Step 4). Setup mode uses the proxy too.
+
 1. Make sure `.env` has your real `TELEGRAM_TOKEN` and an **empty** `TELEGRAM_USER_ID=`.
 2. Start setup mode:
 
@@ -1300,6 +1367,8 @@ WantedBy=default.target
 ```
 
 (`%h` means your home folder. We call the venv's Python directly, so you do not need to activate anything.)
+
+> If you use `TELEGRAM_PROXY`, the proxy/VPN app must be running for the bot to connect. `bootstrap_retries=-1` makes the bot keep retrying at startup, so it recovers once the proxy is up. The service reads `TELEGRAM_PROXY` from `.env` like every other setting.
 
 Enable and start it:
 
@@ -1373,6 +1442,10 @@ Testing offline behavior with Telegram: turn the laptop's Wi-Fi off. Telegram ca
 | `ModuleNotFoundError: No module named 'telegram'` or `'openai'` | Run `pip install -r requirements.txt` inside the venv |
 | Bot never answers you | Wrong `TELEGRAM_USER_ID`, or `.env` not reloaded. Restart Rubi. Check `logs/actions.log` for `telegram_access` BLOCKED lines with your real ID |
 | `Conflict: terminated by other getUpdates request` | Two copies of the bot are running (for example the service plus a manual run). Stop one |
+| `httpx.ConnectTimeout` / `telegram.error.TimedOut` at startup | The laptop cannot reach `api.telegram.org` (often blocked by the ISP). Test with `curl -m 10 -I https://api.telegram.org`. Fix: start a VPN/proxy and set `TELEGRAM_PROXY` in `.env` (Step 4), then restart |
+| Still `ConnectTimeout` with `TELEGRAM_PROXY` set | The proxy app is not running, or the port is wrong. Check with `ss -ltn \| grep 1080` (use your port). Also confirm the scheme: `socks5://` for SOCKS, `http://` for HTTP proxies |
+| `socksio package is not installed` or `Unknown scheme for proxy URL` | You use `socks5://` without SOCKS support. Run `pip install "httpx[socks]"` inside the venv |
+| `TypeError: ... unexpected keyword argument 'proxy'` | Your `python-telegram-bot` is old (v20.x used `proxy_url=`). Best fix: `pip install -U python-telegram-bot` |
 | Approval buttons never appear | Check the log. Without `.concurrent_updates(True)` this deadlocks. Confirm that line exists |
 | Buttons say "expired" immediately | Rubi was restarted, or more than 2 minutes passed. Ask again |
 | `TypeError: ... unexpected keyword argument` from the telegram library | Library versions differ. Check `pip show python-telegram-bot` and the docs for your version (`run_polling`, `Application.builder`) |
@@ -1400,6 +1473,7 @@ Stage 3 adds a **remote control channel** to your laptop, so be strict:
 - **Your Telegram account is now a key to your laptop.** If someone takes it over, they can tap Yes. Turn on Two-Step Verification.
 - **Protect the bot token.** Anyone with the token can read your chat with the bot. If it leaks, `/revoke` it in BotFather.
 - **Telegram chats are not end-to-end encrypted** (bot chats are stored on Telegram's servers). Rubi's replies, including command output and file contents, pass through Telegram. Do not ask it to show secrets.
+- **A proxy or VPN sees where you connect.** Telegram traffic is encrypted (HTTPS) between Rubi and Telegram, so a normal proxy cannot read your messages or token, but it can see that you use Telegram. Use a VPN/proxy you trust. Never use random free public proxies for a bot that controls your laptop.
 - **Old messages are ignored at startup** (`drop_pending_updates=True`), so nothing queued while Rubi was off can run later.
 - **Online, your conversation goes to Groq. Offline or in `/brain ollama` mode it stays on your laptop** (except what Telegram itself carries). Use `/brain ollama` when handling anything private.
 - **The local model is weaker.** Small models misunderstand more and follow tool formats less reliably. The safety layer applies equally, but read approval prompts even more carefully when Rubi is on the local brain.
@@ -1415,6 +1489,7 @@ Stage 3 adds a **remote control channel** to your laptop, so be strict:
 - [ ] Offline (or `/brain ollama`), it shows `[brain] now using ollama`, and notes/reminders still work
 - [ ] After reconnecting, it returns to Groq on its own
 - [ ] Your Telegram messages get answers, and a second account gets **no** reply
+- [ ] (Only if Telegram is blocked for you) the startup line shows `Telegram proxy: enabled` and the bot connects
 - [ ] Risky actions show Yes/No buttons and "No" really stops them
 - [ ] Reminders arrive on your phone and as desktop popups
 - [ ] `python test_safety.py` still passes

@@ -10,7 +10,10 @@ requires-python = ">=3.11"
 dependencies = [
     "apscheduler>=3.11.3",
     "groq>=1.7.0",
+    "httpx[socks]>=0.28.1",
+    "openai>=3.23.0",
     "python-dotenv>=1.2.4",
+    "python-telegram-bot>=22.8",
 ]
 
 [project.scripts]

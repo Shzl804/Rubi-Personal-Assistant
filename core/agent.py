@@ -1,15 +1,15 @@
-# core/agent.py
+# core/agent.py  (Stage 3 version)
 import json
 
-from groq import Groq
-
-from config import GROQ_API_KEY, MODEL_NAME, MAX_HISTORY, MAX_TOOL_ROUNDS
+from config import MAX_HISTORY, MAX_TOOL_ROUNDS
+from core.llm import LLMRouter
 from core.prompts import build_system_prompt
 from tools.registry import TOOL_SCHEMAS, run_tool
 
 
 def trim_history(history: list, max_len: int) -> list:
-    """Keep only the latest messages, starting from a user message."""
+    """Keep only the latest messages, and make sure the first one is from the user.
+    (A 'tool' message without the assistant message that requested it would be rejected.)"""
     if len(history) <= max_len:
         return history
     history = history[-max_len:]
@@ -20,27 +20,15 @@ def trim_history(history: list, max_len: int) -> list:
 
 class Agent:
     def __init__(self):
-        self.client = Groq(api_key=GROQ_API_KEY)
-        self.history = []          # list of messages (without the system prompt)
+        self.llm = LLMRouter()     # the brain switcher (Groq or Ollama)
+        self.history = []          # conversation so far, WITHOUT the system prompt
 
-    def _call_llm(self, messages: list):
-        """Call Groq. Retry once, because tool calls occasionally fail randomly."""
-        last_error = None
-        for _ in range(2):
-            try:
-                return self.client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    tools=TOOL_SCHEMAS,
-                    tool_choice="auto",
-                    temperature=0.3,
-                )
-            except Exception as error:
-                last_error = error
-        raise last_error
+    def reset(self):
+        """Forget the current conversation (notes and reminders in the database stay)."""
+        self.history = []
 
     def chat(self, user_text: str) -> str:
-        start = len(self.history)    # remember where this turn began (for error cleanup)
+        start = len(self.history)    # where this turn began, for cleanup if something fails
         self.history.append({"role": "user", "content": user_text})
 
         try:
@@ -48,50 +36,55 @@ class Agent:
                 # The system prompt is rebuilt every time so the clock stays current.
                 messages = [{"role": "system", "content": build_system_prompt()}] + self.history
 
-                response = self._call_llm(messages)
+                response = self.llm.complete(messages, TOOL_SCHEMAS)
                 msg = response.choices[0].message
+
+                # Normalise the tool calls into plain tuples: (id, name, arguments_text).
+                # Doing this once means the SAME id is used in the assistant message and in
+                # the tool result, even when a model forgot to send an id.
+                calls = []
+                for index, call in enumerate(msg.tool_calls or []):
+                    arguments = call.function.arguments
+                    if not isinstance(arguments, str):      # some servers return a dict
+                        arguments = json.dumps(arguments)
+                    calls.append((call.id or f"call_{index}", call.function.name, arguments))
 
                 # Save the assistant's message in plain-dict form.
                 entry = {"role": "assistant", "content": msg.content or ""}
-                if msg.tool_calls:
+                if calls:
                     entry["tool_calls"] = [
-                        {
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.function.name,
-                                "arguments": call.function.arguments,
-                            },
-                        }
-                        for call in msg.tool_calls
+                        {"id": cid, "type": "function", "function": {"name": name, "arguments": args}}
+                        for cid, name, args in calls
                     ]
                 self.history.append(entry)
 
-                # No tool requested: this is the final answer.
-                if not msg.tool_calls:
+                # No tools requested: this is the final answer.
+                if not calls:
                     reply = msg.content or ""
                     self.history = trim_history(self.history, MAX_HISTORY)
                     return reply
 
-                # Run each requested tool and send results back.
-                for call in msg.tool_calls:
-                    name = call.function.name
+                # Run each requested tool and send the results back.
+                for cid, name, raw_args in calls:
                     try:
-                        args = json.loads(call.function.arguments or "{}")
+                        args = json.loads(raw_args or "{}")
                     except json.JSONDecodeError:
                         result = "Error: the tool arguments were not valid JSON."
                     else:
-                        print(f"   [tool] {name}({args})")
+                        shown = str(args)
+                        if len(shown) > 150:
+                            shown = shown[:150] + "..."
+                        print(f"   [tool] {name}({shown})")
                         result = run_tool(name, args)
 
                     self.history.append({
                         "role": "tool",
-                        "tool_call_id": call.id,
+                        "tool_call_id": cid,
                         "content": str(result),
                     })
 
             return "I could not finish that request. Please try rephrasing it."
 
         except Exception as error:
-            del self.history[start:]     # undo this turn so history stays valid
-            return f"(Error talking to Groq: {error})"
+            del self.history[start:]     # undo this turn so the history stays valid
+            return f"(Error: {error})"

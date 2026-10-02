@@ -1,3 +1,5 @@
 groq
 python-dotenv
 apscheduler
+openai
+python-telegram-bot
