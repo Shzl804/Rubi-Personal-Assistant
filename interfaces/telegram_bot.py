@@ -13,8 +13,11 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters,
 )
+from telegram.request import HTTPXRequest
 
-from config import TELEGRAM_TOKEN, TELEGRAM_USER_ID, APPROVAL_TIMEOUT_SECONDS
+from config import (
+    TELEGRAM_TOKEN, TELEGRAM_USER_ID, TELEGRAM_PROXY, APPROVAL_TIMEOUT_SECONDS,
+)
 from core import notifier, safety
 from core.agent import Agent
 from core.commands import handle_command
@@ -235,6 +238,32 @@ async def post_init(application: Application) -> None:
 # Starting the bot
 # ===========================================================================
 
+def _new_builder():
+    """
+    Application builder shared by setup mode and normal mode.
+
+    If TELEGRAM_PROXY is set, ONLY Telegram traffic goes through it. Groq and Ollama
+    use their own HTTP clients, so they are not affected.
+
+    python-telegram-bot uses TWO separate HTTP clients: one for normal calls
+    (send_message, ...) and one for the long-polling getUpdates call.
+    Both need the same proxy. The longer timeouts help on slow proxies/VPNs.
+    (TELEGRAM_PROXY = None simply means "no proxy".)
+    """
+    request = HTTPXRequest(
+        proxy=TELEGRAM_PROXY, connect_timeout=30, read_timeout=30, write_timeout=30,
+    )
+    updates_request = HTTPXRequest(
+        proxy=TELEGRAM_PROXY, connect_timeout=30, read_timeout=30,
+    )
+    return (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .request(request)
+        .get_updates_request(updates_request)
+    )
+
+
 def can_start() -> bool:
     """True if both the token and your user ID are configured."""
     return bool(TELEGRAM_TOKEN and TELEGRAM_USER_ID)
@@ -257,7 +286,7 @@ def _run_setup_mode() -> None:
     print("Open Telegram, send any message to your bot, and copy the ID it replies with.")
     print("Then add it to .env and restart. Press Ctrl+C to stop.\n")
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = _new_builder().build()
     app.add_handler(MessageHandler(
         filters.UpdateType.MESSAGE & filters.ChatType.PRIVATE, reply_id
     ))
@@ -279,8 +308,7 @@ def run() -> None:
     allowed = filters.User(user_id=TELEGRAM_USER_ID) & filters.ChatType.PRIVATE
 
     app = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
+        _new_builder()          # token + optional proxy (see above)
         # IMPORTANT: lets button taps be processed while on_text is still waiting.
         # Without this, approvals would deadlock (see "Idea B" at the top of the guide).
         .concurrent_updates(True)
@@ -296,6 +324,7 @@ def run() -> None:
     app.add_handler(MessageHandler(~allowed, on_stranger))   # everyone else: log, never reply
     app.add_error_handler(on_error)
 
+    print(f"Telegram proxy: {'enabled' if TELEGRAM_PROXY else 'none'}")
     print("Telegram bot is running. Press Ctrl+C to stop.")
     app.run_polling(
         # SAFETY: ignore any messages that arrived while Rubi was off. Otherwise old

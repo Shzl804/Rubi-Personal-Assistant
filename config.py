@@ -71,6 +71,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 _raw_id = os.getenv("TELEGRAM_USER_ID", "").strip()
 TELEGRAM_USER_ID = int(_raw_id) if _raw_id.isdigit() else 0
 
+# OPTIONAL proxy used ONLY for Telegram traffic (see "Optional: use a proxy only for
+# Telegram" below). Empty means "no proxy". Examples:
+#   socks5://127.0.0.1:1080      http://127.0.0.1:8080
+TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", "").strip() or None
+
 # If you do not tap Yes/No within this time, the request is treated as DENIED.
 APPROVAL_TIMEOUT_SECONDS = 120
 

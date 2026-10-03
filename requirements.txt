@@ -3,3 +3,4 @@ python-dotenv
 apscheduler
 openai
 python-telegram-bot
+httpx[socks]
