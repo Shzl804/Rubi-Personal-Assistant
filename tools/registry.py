@@ -1,5 +1,7 @@
 # tools/registry.py
 from tools import notes, reminders, files, system
+from memory import archive, long_term
+from research.researcher import format_research_context, research
 
 
 def _tool(name, description, properties=None, required=None):
@@ -154,6 +156,44 @@ TOOL_SCHEMAS = [
         },
         ["keyword"],
     ),
+    _tool(
+        "remember_user",
+        "Save durable information only when the user explicitly asked Rubi to remember it.",
+        {
+            "content": {"type": "string", "description": "The exact memory to save."},
+            "category": {"type": "string", "description": "preference, personal_fact, project_decision, workflow, goal, or constraint."},
+            "topic": {"type": "string"},
+            "project": {"type": "string"},
+        },
+        ["content"],
+    ),
+    _tool(
+        "find_memory",
+        "Search confirmed memories relevant to the current request.",
+        {
+            "query": {"type": "string"},
+            "topic": {"type": "string"},
+            "project": {"type": "string"},
+        },
+        ["query"],
+    ),
+    _tool(
+        "run_research",
+        "Search the web and return source material for a current or research question.",
+        {"query": {"type": "string"}},
+        ["query"],
+    ),
+    _tool(
+        "archive_research",
+        "Save a completed research result to the local archive.",
+        {
+            "title": {"type": "string"},
+            "content": {"type": "string"},
+            "topic": {"type": "string"},
+            "project": {"type": "string"},
+        },
+        ["title", "content"],
+    ),
 ]
 
 
@@ -178,6 +218,47 @@ TOOL_FUNCTIONS = {
     "move_file": files.move_file,
     "search_files": files.search_files,
 }
+
+
+def _remember_user(content, category="preference", topic=None, project=None):
+    lowered = str(content).lower()
+    if any(secret in lowered for secret in ("password", "api key", "token", "secret")):
+        return "Refused: secrets cannot be saved as memory."
+    memory_id = long_term.add_memory(
+        content, category, topic, project,
+        confidence=0.95, source="explicit_user_request",
+    )
+    return "Saved memory {}.".format(memory_id)
+
+
+def _find_memory(query, topic=None, project=None):
+    rows = long_term.search_memories(query, topic, project)
+    if not rows:
+        return "No matching confirmed memories."
+    return "\n".join(
+        "[{}] {} ({})".format(row["id"], row["content"], row["category"])
+        for row in rows
+    )
+
+
+def _run_research(query):
+    report = research(query)
+    return format_research_context(report)
+
+
+def _archive_research(title, content, topic=None, project=None):
+    archive_id = archive.save_archive(
+        "research", content, title, topic, project, source="web"
+    )
+    return "Saved research archive {}.".format(archive_id)
+
+
+TOOL_FUNCTIONS.update({
+    "remember_user": _remember_user,
+    "find_memory": _find_memory,
+    "run_research": _run_research,
+    "archive_research": _archive_research,
+})
 
 
 def run_tool(name: str, args: dict) -> str:

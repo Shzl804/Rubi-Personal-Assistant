@@ -25,6 +25,8 @@ def main():
         return
 
     init_db()
+    from memory.migrations import run_migrations
+    run_migrations()
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
     # Where reminders are delivered (the Telegram sink is added later by the bot itself).

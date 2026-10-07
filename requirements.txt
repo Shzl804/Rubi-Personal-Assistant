@@ -11,3 +11,6 @@ edge-tts
 piper-tts
 openwakeword
 pynput
+fastapi
+uvicorn[standard]
+streamlit

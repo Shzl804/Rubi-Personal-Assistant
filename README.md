@@ -896,7 +896,7 @@ Archives keep raw conversations and research separate from curated memories.
 
 ### Step 7: Add research/search.py
 
-This uses the Brave Search API. Create an API key at Brave Search, then place it in the environment. If you choose another provider later, only this file should need to change.
+This uses the Tavily Search API. Create an API key at Tavily, then place it in the environment. Tavily returns relevance-ranked, LLM-ready source content, so Rubi does not need to scrape every result page itself.
 
     # research/search.py
     import os
@@ -905,14 +905,14 @@ This uses the Brave Search API. Create an API key at Brave Search, then place it
     import json
 
 
-    SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+    SEARCH_URL = "https://api.tavily.com/search"
 
 
     def search_web(query, count=5):
-        api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+        api_key = os.getenv("TAVILY_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "BRAVE_SEARCH_API_KEY is missing. Add it to .env before using web search."
+                "TAVILY_API_KEY is missing. Add it to .env before using web search."
             )
 
         params = urllib.parse.urlencode({
@@ -1039,11 +1039,11 @@ Suggestions are opt-in. Rubi should not interrupt every conversation.
 
 Add this to .env. Do not commit .env to GitHub.
 
-    BRAVE_SEARCH_API_KEY=put_your_key_here
+    TAVILY_API_KEY=put_your_key_here
 
 Add these defaults to config.py:
 
-    BRAVE_SEARCH_ENABLED = bool(os.getenv("BRAVE_SEARCH_API_KEY"))
+    TAVILY_SEARCH_ENABLED = bool(os.getenv("TAVILY_API_KEY"))
     MEMORY_RETRIEVAL_LIMIT = 8
     SHORT_TERM_MESSAGE_LIMIT = 20
     ARCHIVE_RESEARCH = True
@@ -1308,7 +1308,7 @@ This first version is extractive rather than model-generated. It is reliable and
 
 ### Step 18: Research usage
 
-After adding the Brave API key, use requests such as:
+After adding the Tavily API key, use requests such as:
 
     research the current Python 3.13 release and cite official sources
 
@@ -1352,3 +1352,37 @@ Do not test with real secrets or sensitive personal information.
 - [ ] The safety tests still pass.
 
 Once these checks pass, the next improvement should be model-generated summaries and better search ranking—not more agents.
+
+## FastAPI and Streamlit UI
+
+Stage 5 now includes a FastAPI backend and a Streamlit frontend.
+
+Install the added dependencies:
+
+    .venv/bin/pip install -r requirements.txt
+
+Start the API in one terminal:
+
+    .venv/bin/uvicorn api.server:app --host 127.0.0.1 --port 8000 --reload
+
+Start Streamlit in a second terminal:
+
+    .venv/bin/streamlit run ui/streamlit_app.py
+
+Then open the local Streamlit URL shown in the terminal, normally:
+
+    http://localhost:8501
+
+The UI supports normal chat, voice conversation, slash commands, chat clearing, memory search, and FastAPI health status. The API endpoints are:
+
+    GET  /health
+    POST /chat
+    POST /command
+    POST /voice
+    GET  /memory
+    POST /memory/search
+    GET  /archive/search?query=...
+
+The API deliberately has no automatic approval prompt for risky desktop actions. Requests that need an interactive approval fail closed unless an interface-specific approver is added.
+
+For voice conversation, click **Record a message** in the Streamlit sidebar, allow microphone access, record your message, and click **Send voice message**. Rubi transcribes it, processes the text through the same Agent, and returns a playable voice reply. The existing online/offline voice behavior applies: Groq or local Whisper transcribes, and edge-TTS or Piper speaks.

@@ -1,9 +1,12 @@
 # core/agent.py  (Stage 3 version)
 import json
 
-from config import MAX_HISTORY, MAX_TOOL_ROUNDS
+from config import MAX_HISTORY, MAX_TOOL_ROUNDS, MEMORY_RETRIEVAL_LIMIT
 from core.llm import LLMRouter
 from core.prompts import build_system_prompt
+from memory.archive import save_archive
+from memory.long_term import search_memories
+from memory.short_term import ShortTermMemory, summarize_messages
 from tools.registry import TOOL_SCHEMAS, run_tool
 
 
@@ -22,19 +25,48 @@ class Agent:
     def __init__(self):
         self.llm = LLMRouter()     # the brain switcher (Groq or Ollama)
         self.history = []          # conversation so far, WITHOUT the system prompt
+        self.memory = ShortTermMemory()
 
     def reset(self):
         """Forget the current conversation (notes and reminders in the database stay)."""
         self.history = []
+        self.memory = ShortTermMemory()
 
     def chat(self, user_text: str) -> str:
         start = len(self.history)    # where this turn began, for cleanup if something fails
+        self.memory.add_message("user", user_text)
+        session_context = self.memory.context()
+        remembered = search_memories(
+            user_text,
+            topic=session_context["topic"],
+            project=session_context["project"],
+            limit=MEMORY_RETRIEVAL_LIMIT,
+        )
         self.history.append({"role": "user", "content": user_text})
 
         try:
             for _ in range(MAX_TOOL_ROUNDS):
                 # The system prompt is rebuilt every time so the clock stays current.
-                messages = [{"role": "system", "content": build_system_prompt()}] + self.history
+                messages = [{"role": "system", "content": build_system_prompt()}]
+                memory_context = []
+                if session_context["summary"]:
+                    memory_context.append("Session summary:\n" + session_context["summary"])
+                if remembered:
+                    memory_context.append(
+                        "Relevant confirmed memories:\n" + "\n".join(
+                            "- " + row["content"] for row in remembered
+                        )
+                    )
+                if memory_context:
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "Optional remembered context. Use it only when relevant; "
+                            "the user's current message takes priority.\n\n" +
+                            "\n\n".join(memory_context)
+                        ),
+                    })
+                messages += self.history
 
                 response = self.llm.complete(messages, TOOL_SCHEMAS)
                 msg = response.choices[0].message
@@ -61,6 +93,17 @@ class Agent:
                 # No tools requested: this is the final answer.
                 if not calls:
                     reply = msg.content or ""
+                    self.memory.add_message("assistant", reply)
+                    self.memory.set_summary(
+                        summarize_messages(self.memory.recent_messages())
+                    )
+                    save_archive(
+                        "conversation",
+                        "User: {}\nAssistant: {}".format(user_text, reply),
+                        topic=session_context["topic"],
+                        project=session_context["project"],
+                        source="agent",
+                    )
                     self.history = trim_history(self.history, MAX_HISTORY)
                     return reply
 

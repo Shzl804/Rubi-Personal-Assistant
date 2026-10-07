@@ -15,6 +15,8 @@ load_dotenv(BASE_DIR / ".env")
 # ---------------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
+FAST_MODEL_NAME = os.getenv("FAST_MODEL_NAME", MODEL_NAME)
+RESEARCH_MODEL_NAME = os.getenv("RESEARCH_MODEL_NAME", MODEL_NAME)
 
 USER_NAME = "Shazi"                       # what Rubi calls you
 DB_PATH = BASE_DIR / "memory" / "rubi.db"  # SQLite file
@@ -88,6 +90,15 @@ OLLAMA_TIMEOUT = 180          # local CPU models can be slow, so be patient
 GROQ_TIMEOUT = 20             # give up on Groq after this many seconds
 GROQ_COOLDOWN_SECONDS = 45    # after a Groq failure, skip Groq for this long
 INTERNET_CACHE_SECONDS = 15   # remember the "am I online?" result for this long
+
+# ---------------------------------------------------------------------------
+# Stage 5 settings (memory and research)
+# ---------------------------------------------------------------------------
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+MEMORY_RETRIEVAL_LIMIT = 8
+SHORT_TERM_MESSAGE_LIMIT = 20
+ARCHIVE_CONVERSATIONS = True
+SUGGESTIONS_ENABLED = False
 
 
 # ---------------------------------------------------------------------------

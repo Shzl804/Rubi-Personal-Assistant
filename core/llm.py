@@ -11,7 +11,8 @@ from openai import APITimeoutError as OllamaTimeout
 from openai import NotFoundError as OllamaModelMissing
 
 from config import (
-    GROQ_API_KEY, MODEL_NAME, GROQ_TIMEOUT, GROQ_COOLDOWN_SECONDS,
+    GROQ_API_KEY, MODEL_NAME, FAST_MODEL_NAME, RESEARCH_MODEL_NAME,
+    GROQ_TIMEOUT, GROQ_COOLDOWN_SECONDS,
     OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT,
 )
 from core import connectivity
@@ -56,6 +57,7 @@ class LLMRouter:
         )
 
         self.mode = "auto"          # "auto": decide by connectivity
+        self.profile = "default"    # default, fast, or research
         self.last_backend = None    # "groq" or "ollama": which one answered last
 
     # ---------------------------------------------------------------- helpers
@@ -63,6 +65,18 @@ class LLMRouter:
         if mode not in self.MODES:
             raise ValueError(f"mode must be one of: {', '.join(self.MODES)}")
         self.mode = mode
+
+    def set_profile(self, profile: str) -> None:
+        if profile not in ("default", "fast", "research"):
+            raise ValueError("profile must be one of: default, fast, research")
+        self.profile = profile
+
+    def selected_model(self) -> str:
+        if self.profile == "fast":
+            return FAST_MODEL_NAME
+        if self.profile == "research":
+            return RESEARCH_MODEL_NAME
+        return MODEL_NAME
 
     def _announce(self, backend: str) -> None:
         """Print a line only when the brain CHANGES, so the terminal stays clean."""
@@ -76,7 +90,7 @@ class LLMRouter:
         for _ in range(2):   # one retry: open models sometimes emit a malformed tool call
             try:
                 return self.groq.chat.completions.create(
-                    model=MODEL_NAME,
+                    model=self.selected_model(),
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
