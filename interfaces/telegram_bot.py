@@ -2,7 +2,9 @@
 #
 # Telegram interface. Runs in the MAIN thread (run_polling needs that).
 # The agent runs in worker threads, and the approver bridges back to the event loop.
+import os
 
+from voice import stt, tts
 import asyncio
 import concurrent.futures
 import logging
@@ -135,25 +137,22 @@ def telegram_sink(title: str, text: str) -> None:
 # Handlers (async, run on the event loop)
 # ===========================================================================
 
-async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _run_agent_and_reply(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                               text: str, speak: bool) -> None:
+    """The old on_text logic, shared by text messages (speak=False) and voice messages (speak=True)."""
     message = update.effective_message
 
-    # Only one request at a time (the agent keeps ONE conversation).
     if agent_lock.locked():
         await message.reply_text("Still working on your previous request. Please wait a moment.")
         return
 
     async with agent_lock:
-        # Tell safety.py to ask via Telegram for everything this request triggers.
-        # asyncio.to_thread copies the current context, so the worker thread sees this.
         safety.set_approver(telegram_approver)
 
         stop = asyncio.Event()
         typing_task = asyncio.create_task(keep_typing(context.bot, update.effective_chat.id, stop))
         try:
-            # Run the blocking agent in a worker thread so the event loop stays free
-            # (it must stay free to receive your button taps!).
-            reply = await asyncio.to_thread(agent.chat, message.text)
+            reply = await asyncio.to_thread(agent.chat, text)
         except Exception as error:
             reply = f"Something went wrong: {error}"
         finally:
@@ -161,7 +160,61 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await typing_task
 
     for part in chunk_text(reply):
-        await message.reply_text(part)              # plain text on purpose: no formatting errors
+        await message.reply_text(part)
+
+    if speak:
+        # You sent a voice message, so you also get a voice note back (plus the text above).
+        await _send_voice_reply(message, reply)
+
+
+async def _send_voice_reply(message, reply: str) -> None:
+    """Make a voice note from the reply and send it. Failure here never loses the text reply."""
+    force_local = agent.llm.mode == "ollama"        # /brain ollama keeps speech on the laptop too
+    audio_path = ogg_path = None
+    try:
+        audio_path = await asyncio.to_thread(tts.synthesize, reply, force_local)
+        ogg_path = await asyncio.to_thread(tts.to_ogg_opus, audio_path)
+        with open(ogg_path, "rb") as voice_file:
+            await message.reply_voice(voice=voice_file)
+    except Exception as error:
+        await message.reply_text(f"(I could not make a voice reply: {error})")
+    finally:
+        for path in (audio_path, ogg_path):         # always delete the temporary files
+            if path is not None and os.path.exists(path):
+                os.remove(path)
+
+
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_agent_and_reply(update, context, update.effective_message.text, speak=False)
+
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+
+    # Very long voice messages are slow and expensive to transcribe.
+    if message.voice.duration and message.voice.duration > 60:
+        await message.reply_text("That voice message is longer than 60 seconds. Please send a shorter one.")
+        return
+
+    force_local = agent.llm.mode == "ollama"
+    try:
+        # Download through the bot's own connection (so it uses the same network settings
+        # as the rest of the bot), then transcribe in a worker thread.
+        telegram_file = await message.voice.get_file()
+        data = bytes(await telegram_file.download_as_bytearray())
+        text = await asyncio.to_thread(stt.transcribe, data, "voice.ogg", force_local)
+    except Exception as error:
+        await message.reply_text(f"I could not process that voice message: {error}")
+        return
+
+    if not text:
+        await message.reply_text("I could not hear any speech in that message.")
+        return
+
+    # Show what was understood, so you can see if something was misheard BEFORE it matters.
+    await message.reply_text(f'I heard: "{text}"')
+    await _run_agent_and_reply(update, context, text, speak=True)
+
 
 
 async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -319,7 +372,8 @@ def run() -> None:
     # Handlers are checked in the order they are added. The first match wins.
     app.add_handler(MessageHandler(allowed & filters.COMMAND, on_command))
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))
-    app.add_handler(MessageHandler(allowed & ~filters.TEXT & ~filters.COMMAND, on_other))
+    app.add_handler(MessageHandler(allowed & filters.VOICE, on_voice))        # NEW: voice messages
+    app.add_handler(MessageHandler(allowed & ~filters.TEXT & ~filters.COMMAND & ~filters.VOICE, on_other))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(~allowed, on_stranger))   # everyone else: log, never reply
     app.add_error_handler(on_error)

@@ -4,3 +4,10 @@ apscheduler
 openai
 python-telegram-bot
 httpx[socks]
+numpy
+sounddevice
+faster-whisper
+edge-tts
+piper-tts
+openwakeword
+pynput

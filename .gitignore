@@ -13,3 +13,4 @@ __pycache__/
 *.db
 logs/
 
+voice/models/

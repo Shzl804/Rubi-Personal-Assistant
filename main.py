@@ -1,9 +1,11 @@
 # main.py
 #
 # Usage:
-#   python main.py            terminal only (default)
+#   python main.py            text terminal only (default)
+#   python main.py voice      voice terminal (typing, wake word, push-to-talk, /listen)
 #   python main.py telegram   Telegram only (use this for the background service)
-#   python main.py both       Telegram + terminal in the same program
+#   python main.py both       text terminal + Telegram
+#   python main.py all        voice terminal + Telegram
 
 import sys
 import threading
@@ -13,11 +15,13 @@ from core import notifier
 from memory.db import init_db
 from scheduler.jobs import start_scheduler
 
+MODES = ("terminal", "voice", "telegram", "both", "all")
+
 
 def main():
     mode = sys.argv[1].lower() if len(sys.argv) > 1 else "terminal"
-    if mode not in ("terminal", "telegram", "both"):
-        print("Usage: python main.py [terminal|telegram|both]")
+    if mode not in MODES:
+        print(f"Usage: python main.py [{'|'.join(MODES)}]")
         return
 
     init_db()
@@ -33,23 +37,30 @@ def main():
             from interfaces import terminal
             terminal.run()
 
+        elif mode == "voice":
+            # Imported here, not at the top, so the other modes work even if the
+            # audio libraries are not installed.
+            from interfaces import voice_terminal
+            voice_terminal.run()
+
         elif mode == "telegram":
-            # Imported here (not at the top) so terminal mode works even if the
-            # Telegram library is not installed.
             from interfaces import telegram_bot
             telegram_bot.run()
 
-        else:  # both
-            from interfaces import terminal, telegram_bot
-            if not telegram_bot.can_start():
-                print("Telegram is not configured yet, starting the terminal only.")
-                print("(Run 'python main.py telegram' once to find your user ID.)\n")
-                terminal.run()
+        else:  # "both" (text terminal + Telegram) or "all" (voice terminal + Telegram)
+            from interfaces import telegram_bot
+            if mode == "all":
+                from interfaces import voice_terminal as local_interface
             else:
-                # The terminal runs in a background thread, and Telegram takes the main
-                # thread (python-telegram-bot's run_polling needs the main thread).
-                # daemon=True: the thread ends automatically when the program ends.
-                threading.Thread(target=terminal.run, daemon=True).start()
+                from interfaces import terminal as local_interface
+
+            if not telegram_bot.can_start():
+                print("Telegram is not configured yet, starting the local interface only.\n")
+                local_interface.run()
+            else:
+                # The local interface runs in a background thread, Telegram takes the main
+                # thread (run_polling needs it). daemon=True: it ends when the program ends.
+                threading.Thread(target=local_interface.run, daemon=True).start()
                 telegram_bot.run()
     finally:
         scheduler.shutdown(wait=False)

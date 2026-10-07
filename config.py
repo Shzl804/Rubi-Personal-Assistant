@@ -88,3 +88,52 @@ OLLAMA_TIMEOUT = 180          # local CPU models can be slow, so be patient
 GROQ_TIMEOUT = 20             # give up on Groq after this many seconds
 GROQ_COOLDOWN_SECONDS = 45    # after a Groq failure, skip Groq for this long
 INTERNET_CACHE_SECONDS = 15   # remember the "am I online?" result for this long
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 settings (voice)
+# ---------------------------------------------------------------------------
+
+# --- Audio format -----------------------------------------------------------
+# Whisper and openWakeWord both expect 16 kHz, mono, 16-bit audio.
+VOICE_SAMPLE_RATE = 16000
+# Audio is processed in small blocks. 1280 samples = 80 ms, which is exactly the
+# frame size openWakeWord wants, so we use it everywhere.
+AUDIO_BLOCK = 1280
+BLOCKS_PER_SECOND = VOICE_SAMPLE_RATE / AUDIO_BLOCK     # = 12.5 blocks per second
+# None = system default microphone. To pick another one, run
+#   python -c "import sounddevice as sd; print(sd.query_devices())"
+# and put the device number here.
+AUDIO_INPUT_DEVICE = None
+
+# --- Speech to text ---------------------------------------------------------
+# Groq model names change sometimes: check the models list in the Groq console.
+GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
+# Local fallback. "small.en" (about 1 GB RAM) is a good balance on a CPU.
+# Faster but less accurate: "base.en". Slower but better: "medium.en".
+LOCAL_STT_MODEL = os.getenv("LOCAL_STT_MODEL", "small.en")
+
+# --- Text to speech ---------------------------------------------------------
+# List all edge-tts voices with:  edge-tts --list-voices
+EDGE_VOICE = os.getenv("EDGE_VOICE", "en-US-JennyNeural")
+PIPER_VOICE_PATH = BASE_DIR / "voice" / "models" / "en_US-amy-medium.onnx"
+SPEAK_MAX_CHARS = 500           # longer replies are shortened when SPOKEN (the text stays complete)
+
+# --- Listening behaviour ----------------------------------------------------
+MIN_SPEECH_RMS = 250            # never treat anything quieter than this as speech
+SILENCE_SECONDS = 1.2           # this much quiet after speech = you finished your sentence
+MAX_RECORD_SECONDS = 20         # hard limit for one utterance
+WAIT_FOR_SPEECH_SECONDS = 6     # give up if nobody speaks within this time
+
+# --- Ways to start a voice turn ---------------------------------------------
+WAKE_WORD_ENABLED = True
+WAKE_MODEL_PATH = BASE_DIR / "voice" / "models" / "rubi.onnx"   # your trained model (Step 12)
+WAKE_THRESHOLD = 0.5            # 0 to 1. Lower = easier to trigger, but more false alarms
+WAKE_BEEP = True                # short beep when the wake word is heard
+
+PTT_ENABLED = True              # hold-to-talk key (works on X11 only, see Step 11)
+PTT_KEY = "f9"
+
+# --- Voice approvals --------------------------------------------------------
+VOICE_APPROVALS = True          # allow saying "yes"/"no" to approve actions (typing always works)
+VOICE_APPROVAL_TIMEOUT = 25     # seconds to answer before it counts as DENIED
