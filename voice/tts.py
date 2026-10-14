@@ -2,7 +2,6 @@
 #
 # Text to speech with automatic online/offline switching.
 
-import asyncio
 import re
 import subprocess
 import sys
@@ -10,8 +9,10 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from config import EDGE_VOICE, PIPER_VOICE_PATH, SPEAK_MAX_CHARS
-from core import connectivity
+from config import (
+    ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID,
+    PIPER_VOICE_PATH, SPEAK_MAX_CHARS,
+)
 from voice import audio
 
 # All generated audio files live here and are deleted right after use.
@@ -32,18 +33,21 @@ def clean_for_speech(text: str) -> str:
     return text
 
 
-async def _edge_save(text: str, path: Path) -> None:
-    import edge_tts   # imported here so a missing package only breaks this path, not everything
-    communicate = edge_tts.Communicate(text, EDGE_VOICE)
-    # wait_for: never hang forever if the connection is poor.
-    await asyncio.wait_for(communicate.save(str(path)), timeout=20)
+def _synth_elevenlabs(text: str) -> Path:
+    import httpx
 
-
-def _synth_edge(text: str) -> Path:
     path = TMP_DIR / f"{uuid.uuid4().hex}.mp3"
-    # asyncio.run() creates a fresh event loop. That is fine here because we are always
-    # called from a plain thread (never from inside a running event loop).
-    asyncio.run(_edge_save(text, path))
+    response = httpx.post(
+        "https://api.elevenlabs.io/v1/text-to-speech/{}".format(ELEVENLABS_VOICE_ID),
+        params={"output_format": "mp3_44100_128"},
+        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        json={"text": text, "model_id": ELEVENLABS_MODEL},
+        timeout=30,
+    )
+    if response.is_error:
+        detail = response.text[-300:].replace("\n", " ")
+        raise RuntimeError(f"ElevenLabs returned HTTP {response.status_code}: {detail}")
+    path.write_bytes(response.content)
     return path
 
 
@@ -65,17 +69,17 @@ def _synth_piper(text: str) -> Path:
 def synthesize(text: str, force_local: bool = False) -> Path:
     """
     Turn text into an audio file and return its path (the caller deletes it).
-    edge-tts first (needs internet and sends the text to Microsoft), Piper otherwise.
+    ElevenLabs is used when configured; Piper is the reliable local fallback.
     """
     text = clean_for_speech(text)
     if not text:
         raise ValueError("there is nothing to say")
 
-    if not force_local and connectivity.has_internet():
+    if ELEVENLABS_API_KEY and not force_local:
         try:
-            return _synth_edge(text)
+            return _synth_elevenlabs(text)
         except Exception as error:
-            print(f"   [voice] online voice failed ({type(error).__name__}); using the offline voice")
+            print(f"   [voice] ElevenLabs failed ({type(error).__name__}); using Piper")
 
     return _synth_piper(text)
 

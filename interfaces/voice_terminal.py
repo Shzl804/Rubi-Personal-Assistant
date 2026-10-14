@@ -55,7 +55,7 @@ def make_voice_approver(mic: audio.Microphone, agent: Agent):
         print("=" * 62)
         print("Say or type yes / no: ", end="", flush=True)
 
-        force_local = agent.llm.mode == "ollama"
+        force_local = False
 
         # Speak only a SHORT summary: the first two lines of the description.
         lines = [line.strip() for line in description.splitlines() if line.strip()]
@@ -139,7 +139,7 @@ def voice_turn(agent: Agent, mic: audio.Microphone, samples) -> None:
             print("   [no speech heard]")
             return
 
-        force_local = agent.llm.mode == "ollama"
+        force_local = False
         text = stt.transcribe(audio.to_wav_bytes(samples), "speech.wav", force_local)
         if not text:
             print("   [could not understand that]")

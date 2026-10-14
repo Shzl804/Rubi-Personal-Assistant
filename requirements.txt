@@ -14,3 +14,4 @@ pynput
 fastapi
 uvicorn[standard]
 streamlit
+playwright>=1.52.0

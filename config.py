@@ -14,9 +14,11 @@ load_dotenv(BASE_DIR / ".env")
 # Stage 1 settings
 # ---------------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
-FAST_MODEL_NAME = os.getenv("FAST_MODEL_NAME", MODEL_NAME)
-RESEARCH_MODEL_NAME = os.getenv("RESEARCH_MODEL_NAME", MODEL_NAME)
+# Groq model settings. GROQ_MODEL is supported for clarity; MODEL_NAME remains
+# accepted for backward compatibility. These settings never affect Ollama.
+MODEL_NAME = os.getenv("GROQ_MODEL", os.getenv("MODEL_NAME", "qwen/qwen3.8-27b"))
+FAST_MODEL_NAME = os.getenv("GROQ_FAST_MODEL", os.getenv("FAST_MODEL_NAME", MODEL_NAME))
+RESEARCH_MODEL_NAME = os.getenv("GROQ_RESEARCH_MODEL", os.getenv("RESEARCH_MODEL_NAME", MODEL_NAME))
 
 USER_NAME = "Shazi"                       # what Rubi calls you
 DB_PATH = BASE_DIR / "memory" / "rubi.db"  # SQLite file
@@ -41,6 +43,19 @@ MAX_OUTPUT_CHARS = 4000     # command output is cut to this length. Saves tokens
                             # stops a huge output from flooding the conversation.
 MAX_READ_CHARS = 20000      # max characters read_file returns
 MAX_WRITE_CHARS = 100000    # max characters write_file/append_file will write
+
+# --- Controlled browser -----------------------------------------------------
+BROWSER_ENABLED = os.getenv("RUBI_BROWSER_ENABLED", "false").lower() == "true"
+BROWSER_HEADLESS = os.getenv("RUBI_BROWSER_HEADLESS", "false").lower() == "true"
+BROWSER_PROFILE_DIR = Path(os.getenv("RUBI_BROWSER_PROFILE_DIR", str(Path.home() / "rubi_workspace" / ".browser-profile")))
+
+# --- WhatsApp Business Platform --------------------------------------------
+WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "false").lower() == "true"
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0")
+WHATSAPP_ALLOWED_SENDERS = {item.strip() for item in os.getenv("WHATSAPP_ALLOWED_SENDERS", "").split(",") if item.strip()}
 
 # Friendly name -> actual program name. Rubi can ONLY open apps listed here.
 # That is deliberate: "open_app" must not become a way to run any program.
@@ -81,11 +96,6 @@ TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", "").strip() or None
 # If you do not tap Yes/No within this time, the request is treated as DENIED.
 APPROVAL_TIMEOUT_SECONDS = 120
 
-# --- Local model (Ollama) ---
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "rubi-local")
-OLLAMA_TIMEOUT = 180          # local CPU models can be slow, so be patient
-
 # --- Brain switching ---
 GROQ_TIMEOUT = 20             # give up on Groq after this many seconds
 GROQ_COOLDOWN_SECONDS = 45    # after a Groq failure, skip Groq for this long
@@ -125,8 +135,10 @@ GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 LOCAL_STT_MODEL = os.getenv("LOCAL_STT_MODEL", "small.en")
 
 # --- Text to speech ---------------------------------------------------------
-# List all edge-tts voices with:  edge-tts --list-voices
-EDGE_VOICE = os.getenv("EDGE_VOICE", "en-US-JennyNeural")
+# ElevenLabs is used when an API key is configured; Piper remains the fallback.
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 PIPER_VOICE_PATH = BASE_DIR / "voice" / "models" / "en_US-amy-medium.onnx"
 SPEAK_MAX_CHARS = 500           # longer replies are shortened when SPOKEN (the text stays complete)
 
@@ -137,7 +149,9 @@ MAX_RECORD_SECONDS = 20         # hard limit for one utterance
 WAIT_FOR_SPEECH_SECONDS = 6     # give up if nobody speaks within this time
 
 # --- Ways to start a voice turn ---------------------------------------------
-WAKE_WORD_ENABLED = True
+# Temporarily disabled to keep the voice path simple. Re-enable when the
+# wake-word model is ready; Enter, /listen, and push-to-talk still work.
+WAKE_WORD_ENABLED = False
 WAKE_MODEL_PATH = BASE_DIR / "voice" / "models" / "rubi.onnx"   # your trained model (Step 12)
 WAKE_THRESHOLD = 0.5            # 0 to 1. Lower = easier to trigger, but more false alarms
 WAKE_BEEP = True                # short beep when the wake word is heard

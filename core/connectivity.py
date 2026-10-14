@@ -1,7 +1,7 @@
 # core/connectivity.py
 #
 # Two separate questions:
-#   has_internet()  -> is the network up at all?             (used by edge-tts)
+#   has_internet()  -> is the network up at all?             (available to online services)
 #   can_use_groq()  -> internet up AND Groq not in cooldown   (used by the LLM and Whisper)
 
 import socket

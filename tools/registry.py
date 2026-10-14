@@ -1,7 +1,8 @@
 # tools/registry.py
-from tools import notes, reminders, files, system
+from tools import notes, reminders, tasks, calendar, briefing, browser, files, system
 from memory import archive, long_term
 from research.researcher import format_research_context, research
+from tools.specialists import delegate_to_specialist
 
 
 def _tool(name, description, properties=None, required=None):
@@ -66,6 +67,51 @@ TOOL_SCHEMAS = [
         {"reminder_id": {"type": "integer", "description": "The id of the reminder to cancel."}},
         ["reminder_id"],
     ),
+
+    # -------------------------- tasks (Phase 1) --------------------------
+    _tool(
+        "add_task", "Create a task with optional priority, due date, and project.",
+        {"title": {"type": "string"}, "description": {"type": "string"},
+         "priority": {"type": "string"}, "due_at": {"type": "string"},
+         "project": {"type": "string"}}, ["title"],
+    ),
+    _tool(
+        "list_tasks", "List tasks, defaulting to open tasks.",
+        {"status": {"type": "string"}, "project": {"type": "string"},
+         "limit": {"type": "integer"}},
+    ),
+    _tool(
+        "update_task", "Update a task's status, title, priority, due date, or project.",
+        {"task_id": {"type": "integer"}, "status": {"type": "string"},
+         "title": {"type": "string"}, "priority": {"type": "string"},
+         "due_at": {"type": "string"}, "project": {"type": "string"}}, ["task_id"],
+    ),
+    _tool("delete_task", "Delete a task by id.", {"task_id": {"type": "integer"}}, ["task_id"]),
+
+    # ------------------------ calendar (Phase 2) -------------------------
+    _tool(
+        "add_calendar_event", "Create a calendar event and reject overlapping events.",
+        {"title": {"type": "string"}, "starts_at": {"type": "string"},
+         "ends_at": {"type": "string"}, "description": {"type": "string"},
+         "location": {"type": "string"}, "project": {"type": "string"}},
+        ["title", "starts_at"],
+    ),
+    _tool(
+        "list_calendar_events", "List scheduled calendar events in a time range.",
+        {"start_at": {"type": "string"}, "end_at": {"type": "string"},
+         "limit": {"type": "integer"}},
+    ),
+    _tool("calendar_agenda", "Show the calendar agenda for a date.", {"date": {"type": "string"}}),
+    _tool(
+        "check_calendar_availability", "Check whether a time range is free.",
+        {"starts_at": {"type": "string"}, "ends_at": {"type": "string"}},
+        ["starts_at", "ends_at"],
+    ),
+    _tool("cancel_calendar_event", "Cancel a scheduled calendar event by id.", {"event_id": {"type": "integer"}}, ["event_id"]),
+    _tool("daily_briefing", "Prepare a daily briefing from the local calendar, tasks, and reminders.", {"date": {"type": "string"}}),
+    _tool("open_browser", "Open a URL in Rubi's controlled browser.", {"url": {"type": "string"}}, ["url"]),
+    _tool("read_browser_page", "Read visible text from a URL in Rubi's controlled browser.", {"url": {"type": "string"}}, ["url"]),
+    _tool("close_browser", "Close Rubi's controlled browser when the user asks.", {}, []),
 
     # ------------------------ system (Stage 2) -------------------------
     _tool(
@@ -184,6 +230,16 @@ TOOL_SCHEMAS = [
         ["query"],
     ),
     _tool(
+        "delegate_to_specialist",
+        "Delegate a focused subtask to a reusable specialist agent. The specialist returns information; it does not replace Rubi's approval and file-safety rules.",
+        {
+            "agent_name": {"type": "string", "description": "researcher, coder, reviewer, reminder, notes, tasks, calendar, files, file_deletion, browser, app_launcher, terminal, memory, research, briefing, tester, or writer"},
+            "task": {"type": "string", "description": "The focused subtask"},
+            "context": {"type": "string", "description": "Relevant project context"},
+        },
+        ["agent_name", "task"],
+    ),
+    _tool(
         "archive_research",
         "Save a completed research result to the local archive.",
         {
@@ -206,6 +262,19 @@ TOOL_FUNCTIONS = {
     "set_reminder": reminders.set_reminder,
     "list_reminders": reminders.list_reminders,
     "cancel_reminder": reminders.cancel_reminder,
+    "add_task": tasks.add_task,
+    "list_tasks": tasks.list_tasks,
+    "update_task": tasks.update_task,
+    "delete_task": tasks.delete_task,
+    "add_calendar_event": calendar.add_event,
+    "list_calendar_events": calendar.list_events,
+    "calendar_agenda": calendar.agenda,
+    "check_calendar_availability": calendar.check_availability,
+    "cancel_calendar_event": calendar.cancel_event,
+    "daily_briefing": briefing.daily_briefing,
+    "open_browser": browser.open_browser,
+    "read_browser_page": browser.read_browser_page,
+    "close_browser": browser.close_browser,
     "run_command": system.run_command,
     "open_app": system.open_app,
     "open_url": system.open_url,
@@ -257,8 +326,16 @@ TOOL_FUNCTIONS.update({
     "remember_user": _remember_user,
     "find_memory": _find_memory,
     "run_research": _run_research,
+    "delegate_to_specialist": delegate_to_specialist,
     "archive_research": _archive_research,
 })
+
+# Rubi's main model uses the specialist delegation surface. The underlying
+# implementations remain registered for the allowlisted domain specialists.
+TOOL_SCHEMAS[:] = [
+    schema for schema in TOOL_SCHEMAS
+    if schema["function"]["name"] == "delegate_to_specialist"
+]
 
 
 def run_tool(name: str, args: dict) -> str:

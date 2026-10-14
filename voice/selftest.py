@@ -27,10 +27,10 @@ def test_mic():
 
 
 def test_tts():
-    """Speak once with the online voice, then once with the offline voice."""
-    print("Online voice (edge-tts)... you should hear a voice.")
+    """Speak once with the configured online voice, then with Piper."""
+    print("Online voice (ElevenLabs, if configured)... you should hear a voice.")
     tts.speak("Hello, I am Rubi. This is my online voice.")
-    print("Offline voice (Piper)...")
+    print("Local voice (Piper)...")
     tts.speak("Hello, I am Rubi. This is my offline voice.", force_local=True)
     print("Done.")
 

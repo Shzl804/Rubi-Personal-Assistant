@@ -4,7 +4,7 @@ import base64
 from pathlib import Path
 from threading import Lock
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from core.agent import Agent
@@ -15,6 +15,8 @@ from memory.db import init_db
 from memory.migrations import run_migrations
 from scheduler.jobs import start_scheduler
 from voice import stt, tts
+from config import WHATSAPP_VERIFY_TOKEN
+from tools import whatsapp
 
 
 class ChatRequest(BaseModel):
@@ -50,6 +52,30 @@ app = FastAPI(
 @app.get("/health")
 def health():
     return {"ok": True, "service": "rubi-api", "model_profile": agent.llm.profile}
+
+
+@app.get("/whatsapp/webhook")
+def whatsapp_verify(
+    mode: str = Query("", alias="hub.mode"),
+    challenge: str = Query("", alias="hub.challenge"),
+    verify_token: str = Query("", alias="hub.verify_token"),
+):
+    if mode == "subscribe" and WHATSAPP_VERIFY_TOKEN and verify_token == WHATSAPP_VERIFY_TOKEN:
+        return int(challenge)
+    raise HTTPException(status_code=403, detail="WhatsApp verification failed")
+
+
+@app.post("/whatsapp/webhook")
+def whatsapp_webhook(payload: dict):
+    incoming = whatsapp.parse_incoming(payload)
+    if not incoming:
+        return {"ok": True, "ignored": True}
+    sender, text = incoming
+    if not whatsapp.WHATSAPP_ALLOWED_SENDERS or sender not in whatsapp.WHATSAPP_ALLOWED_SENDERS:
+        return {"ok": True, "ignored": True}
+    with agent_lock:
+        reply = agent.chat(text)
+    return {"ok": True, "sent": whatsapp.send_text(sender, reply)}
 
 
 @app.post("/chat")
@@ -93,7 +119,7 @@ async def voice_message(audio: UploadFile = File(...)):
     audio_path = None
     try:
         audio_path = await asyncio.to_thread(
-            tts.synthesize, reply, agent.llm.mode == "ollama"
+            tts.synthesize, reply, False
         )
         encoded = base64.b64encode(Path(audio_path).read_bytes()).decode("ascii")
         mime = "audio/wav" if str(audio_path).endswith(".wav") else "audio/mpeg"

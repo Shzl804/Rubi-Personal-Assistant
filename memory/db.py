@@ -38,6 +38,34 @@ def init_db():
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'normal',
+                due_at TEXT,
+                project TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                location TEXT NOT NULL DEFAULT '',
+                project TEXT,
+                status TEXT NOT NULL DEFAULT 'scheduled',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT PRIMARY KEY,
                 topic      TEXT,
@@ -98,3 +126,5 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(topic, project, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_due ON tasks(status, due_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_calendar_events_time ON calendar_events(starts_at, ends_at, status)")

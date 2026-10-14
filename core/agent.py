@@ -2,7 +2,7 @@
 import json
 
 from config import MAX_HISTORY, MAX_TOOL_ROUNDS, MEMORY_RETRIEVAL_LIMIT
-from core.llm import LLMRouter
+from core.llm import LLMRouter, hide_reasoning
 from core.prompts import build_system_prompt
 from memory.archive import save_archive
 from memory.long_term import search_memories
@@ -23,7 +23,7 @@ def trim_history(history: list, max_len: int) -> list:
 
 class Agent:
     def __init__(self):
-        self.llm = LLMRouter()     # the brain switcher (Groq or Ollama)
+        self.llm = LLMRouter()     # the online Groq answer model
         self.history = []          # conversation so far, WITHOUT the system prompt
         self.memory = ShortTermMemory()
 
@@ -82,7 +82,7 @@ class Agent:
                     calls.append((call.id or f"call_{index}", call.function.name, arguments))
 
                 # Save the assistant's message in plain-dict form.
-                entry = {"role": "assistant", "content": msg.content or ""}
+                entry = {"role": "assistant", "content": hide_reasoning(msg.content)}
                 if calls:
                     entry["tool_calls"] = [
                         {"id": cid, "type": "function", "function": {"name": name, "arguments": args}}
@@ -92,7 +92,7 @@ class Agent:
 
                 # No tools requested: this is the final answer.
                 if not calls:
-                    reply = msg.content or ""
+                    reply = hide_reasoning(msg.content)
                     self.memory.add_message("assistant", reply)
                     self.memory.set_summary(
                         summarize_messages(self.memory.recent_messages())

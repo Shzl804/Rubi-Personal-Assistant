@@ -19,12 +19,17 @@ dependencies = [
     "openwakeword>=0.6.0",
     "piper-tts>=1.8.0",
     "pynput>=1.8.2",
+    "playwright>=1.52.0",
     "python-dotenv>=1.2.4",
     "python-telegram-bot>=22.8",
     "sounddevice>=0.5.6",
     "streamlit>=1.40.0",
     "uvicorn[standard]>=0.30.0",
+    "agent-lib",
 ]
+
+[tool.uv.sources]
+agent-lib = { path = "../agent-lib", editable = true }
 
 [project.scripts]
 rubi-assistant = "rubi_assistant:main"

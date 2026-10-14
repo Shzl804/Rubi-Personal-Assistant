@@ -1,21 +1,28 @@
 # core/llm.py
 #
-# The "router": the only file that knows there are two brains.
-# The agent just calls  router.complete(messages, tools)  and gets a response.
+# The "router": the only file that knows how the online answer model is called.
+# The agent just calls router.complete(messages, tools) and gets a response.
 
 import groq
+import re
 from groq import Groq
+import openai
 from openai import OpenAI
-from openai import APIConnectionError as OllamaConnectionError
-from openai import APITimeoutError as OllamaTimeout
-from openai import NotFoundError as OllamaModelMissing
 
 from config import (
     GROQ_API_KEY, MODEL_NAME, FAST_MODEL_NAME, RESEARCH_MODEL_NAME,
     GROQ_TIMEOUT, GROQ_COOLDOWN_SECONDS,
-    OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT,
 )
 from core import connectivity
+
+
+def hide_reasoning(text):
+    """Remove leaked Qwen thinking blocks before text enters history or the UI."""
+    if not text:
+        return text or ""
+    cleaned = re.sub(r"<think>.*?</think>", "", str(text), flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"^\s*Thinking:\s*.*?(?=\n\s*(?:Final|Answer):|\Z)", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    return cleaned.strip()
 
 
 def _groq_errors(*names):
@@ -24,6 +31,10 @@ def _groq_errors(*names):
     getattr/hasattr makes this safe even if a library version names one differently.
     """
     return tuple(getattr(groq, n) for n in names if hasattr(groq, n))
+
+
+def _openai_errors(*names):
+    return tuple(getattr(openai, n) for n in names if hasattr(openai, n))
 
 
 # Errors that mean "Groq cannot serve me right now", so the local model should take over.
@@ -35,30 +46,36 @@ GROQ_UNAVAILABLE_ERRORS = _groq_errors(
     "RateLimitError",       # too many requests / tokens
     "InternalServerError",  # Groq-side failure (5xx)
 )
+GROQ_UNAVAILABLE_ERRORS += _openai_errors(
+    "APIConnectionError",
+    "APITimeoutError",
+    "RateLimitError",
+    "InternalServerError",
+)
 # NOT in the list: AuthenticationError (bad key) and BadRequestError (our mistake).
 # Falling back would only hide a bug that you need to see.
 
 
 class LLMRouter:
-    MODES = ("auto", "groq", "ollama")
+    # Ollama is intentionally disabled for now. Rubi should report an internet
+    # problem instead of silently switching to a different answer model.
+    MODES = ("auto", "groq")
 
     def __init__(self):
         # max_retries=1: the SDK retries automatically on connection errors; the
         # default (2 retries with waiting) would delay the fallback too much.
-        self.groq = Groq(api_key=GROQ_API_KEY, timeout=GROQ_TIMEOUT, max_retries=1)
-
-        # Ollama exposes an OpenAI-compatible API under /v1, so the 'openai' client
-        # works. The api_key is required by the client but ignored by Ollama.
-        self.ollama = OpenAI(
-            base_url=f"{OLLAMA_URL}/v1",
-            api_key="ollama",
-            timeout=OLLAMA_TIMEOUT,
-            max_retries=0,
+        # Groq's OpenAI-compatible endpoint handles Rubi's function-tool
+        # requests correctly. The native Groq client remains used by voice STT.
+        self.groq = OpenAI(
+            api_key=GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
+            timeout=GROQ_TIMEOUT,
+            max_retries=1,
         )
 
-        self.mode = "auto"          # "auto": decide by connectivity
+        self.mode = "auto"          # "auto": use Groq when internet is available
         self.profile = "default"    # default, fast, or research
-        self.last_backend = None    # "groq" or "ollama": which one answered last
+        self.last_backend = None    # "groq": which one answered last
 
     # ---------------------------------------------------------------- helpers
     def set_mode(self, mode: str) -> None:
@@ -87,52 +104,35 @@ class LLMRouter:
     # ----------------------------------------------------------------- Groq
     def _call_groq(self, messages, tools):
         last_error = None
+        options = {
+            "model": self.selected_model(),
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": 0.3,
+        }
+        if self.selected_model().startswith("qwen/qwen3"):
+            # Qwen still reasons internally, but Groq returns only the final answer.
+            options["reasoning_format"] = "hidden"
+            options["reasoning_effort"] = "none"
         for _ in range(2):   # one retry: open models sometimes emit a malformed tool call
             try:
-                return self.groq.chat.completions.create(
-                    model=self.selected_model(),
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.3,
-                )
+                return self.groq.chat.completions.create(**options)
             except GROQ_UNAVAILABLE_ERRORS:
                 raise                    # no point retrying: let complete() decide the fallback
             except Exception as error:   # e.g. a flaky malformed tool call: try once more
                 last_error = error
         raise last_error
 
-    # --------------------------------------------------------------- Ollama
-    def _call_ollama(self, messages, tools):
-        try:
-            # tool_choice is left out on purpose: not every Ollama version supports it,
-            # and "auto" is already the default behavior.
-            return self.ollama.chat.completions.create(
-                model=OLLAMA_MODEL,
-                messages=messages,
-                tools=tools,
-                temperature=0.3,
-            )
-        # Order matters: APITimeoutError is a subclass of APIConnectionError, so it must come first.
-        except OllamaTimeout as error:
-            raise RuntimeError(
-                "The local model took too long to answer. Try a smaller model."
-            ) from error
-        except OllamaConnectionError as error:
-            raise RuntimeError(
-                f"The local model is not reachable at {OLLAMA_URL}. "
-                f"Is Ollama running? Check: systemctl status ollama"
-            ) from error
-        except OllamaModelMissing as error:
-            raise RuntimeError(
-                f"The local model '{OLLAMA_MODEL}' was not found. "
-                f"Run 'ollama list' and fix OLLAMA_MODEL in .env."
-            ) from error
-
     # ---------------------------------------------------------- public method
     def complete(self, messages, tools):
-        """Return a chat completion from whichever brain is appropriate right now."""
-        use_groq = self.mode == "groq" or (self.mode == "auto" and connectivity.can_use_groq())
+        """Return a Groq completion, or a clear error when internet is unavailable."""
+        if not connectivity.can_use_groq():
+            raise RuntimeError(
+                "Internet is not working, so I cannot contact the answer model right now."
+            )
+
+        use_groq = True
 
         if use_groq:
             try:
@@ -140,17 +140,8 @@ class LLMRouter:
                 self._announce("groq")
                 return response
             except GROQ_UNAVAILABLE_ERRORS as error:
-                if self.mode == "groq":
-                    # You explicitly asked for Groq only, so do not silently switch.
-                    raise RuntimeError(
-                        f"Groq is unavailable ({type(error).__name__}) and the brain mode is 'groq' only. "
-                        f"Use /brain auto to allow the local model."
-                    ) from error
-                # Remember the failure so the next messages skip Groq for a while.
+                # Remember the failure so the next messages fail quickly too.
                 connectivity.mark_unavailable(GROQ_COOLDOWN_SECONDS)
-                print(f"   [brain] Groq unavailable ({type(error).__name__}); switching to the local model")
-
-        # Reached when: offline, mode == "ollama", or Groq just failed.
-        response = self._call_ollama(messages, tools)
-        self._announce("ollama")
-        return response
+                raise RuntimeError(
+                    "Internet is not working, so I cannot contact the answer model right now."
+                ) from error

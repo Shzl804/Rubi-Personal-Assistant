@@ -169,7 +169,7 @@ async def _run_agent_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _send_voice_reply(message, reply: str) -> None:
     """Make a voice note from the reply and send it. Failure here never loses the text reply."""
-    force_local = agent.llm.mode == "ollama"        # /brain ollama keeps speech on the laptop too
+    force_local = False
     audio_path = ogg_path = None
     try:
         audio_path = await asyncio.to_thread(tts.synthesize, reply, force_local)
@@ -196,7 +196,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("That voice message is longer than 60 seconds. Please send a shorter one.")
         return
 
-    force_local = agent.llm.mode == "ollama"
+        force_local = False
     try:
         # Download through the bot's own connection (so it uses the same network settings
         # as the rest of the bot), then transcribe in a worker thread.
@@ -281,7 +281,7 @@ async def post_init(application: Application) -> None:
     # The command menu that appears when you type "/" in the chat.
     await application.bot.set_my_commands([
         BotCommand("status", "Show which brain is in use"),
-        BotCommand("brain", "auto, groq or ollama"),
+        BotCommand("brain", "auto or groq"),
         BotCommand("clear", "Forget this conversation"),
         BotCommand("help", "Show commands"),
     ])
